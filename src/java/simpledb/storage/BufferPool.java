@@ -9,6 +9,8 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -19,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The BufferPool is also responsible for locking;  when a transaction fetches
  * a page, BufferPool checks that the transaction has the appropriate
  * locks to read/write the page.
- * 
+ *
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
@@ -27,12 +29,57 @@ public class BufferPool {
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
     private static int pageSize = DEFAULT_PAGE_SIZE;
-    
+
     /** Default number of pages passed to the constructor. This is used by
     other classes. BufferPool should use the numPages argument to the
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
+
+    // add
+    private final int numPages;
+//    private final ConcurrentHashMap<Integer, PageId> pageStore;
+
+    private final ConcurrentHashMap<PageId, Page> pageStore;
+    // 页面的访问顺序
+    private static class LinkedNode{
+        PageId pageId;
+        Page page;
+        LinkedNode prev;
+        LinkedNode next;
+        public LinkedNode(PageId pageId, Page page){
+            this.pageId = pageId;
+            this.page = page;
+        }
+    }
+
+    // 头节点和尾节点都是虚空节点
+    // 头节点
+    LinkedNode head;
+    // 尾节点
+    LinkedNode tail;
+
+    private void addToHead(LinkedNode node) {
+        node.prev = head;
+        node.next = head.next;
+        head.next.prev = node;
+        head.next = node;
+    }
+
+    private void remove(LinkedNode node) {
+        node.prev.next = node.next;
+        node.next.prev = node.prev;
+    }
+    private void moveToHead(LinkedNode node) {
+        remove(node);
+        addToHead(node);
+    }
+    private LinkedNode removeTail() {
+        LinkedNode node = tail.prev;
+        remove(node);
+        return node;
+
+    }
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
@@ -40,17 +87,24 @@ public class BufferPool {
      */
     public BufferPool(int numPages) {
         // some code goes here
+
+        this.numPages =  numPages;
+        this.pageStore = new ConcurrentHashMap<>();
+        head = new LinkedNode(new HeapPageId(-1, -1), null);
+        tail = new LinkedNode(new HeapPageId(-1, -1), null);
+        head.next = tail;
+        tail.prev = head;
     }
-    
+
     public static int getPageSize() {
       return pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void setPageSize(int pageSize) {
     	BufferPool.pageSize = pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void resetPageSize() {
     	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
@@ -74,7 +128,28 @@ public class BufferPool {
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
-        return null;
+
+
+        // 如果缓存池中没有
+        if(!pageStore.containsKey(pid)){
+            // 获取
+            DbFile dbFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            Page page = dbFile.readPage(pid);
+            // 是否超过大小
+            if(pageStore.size() >= numPages){
+                // 使用 LRU 算法进行淘汰最近最久未使用
+                evictPage();
+            }
+
+            // 放入缓存
+            pageStore.put(pid, page);
+
+        }
+
+        // 从 缓存池 中获取
+        return pageStore.get(pid);
+
+//        return null;
     }
 
     /**
@@ -122,14 +197,14 @@ public class BufferPool {
 
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
-     * acquire a write lock on the page the tuple is added to and any other 
-     * pages that are updated (Lock acquisition is not needed for lab2). 
+     * acquire a write lock on the page the tuple is added to and any other
+     * pages that are updated (Lock acquisition is not needed for lab2).
      * May block if the lock(s) cannot be acquired.
-     * 
+     *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction adding the tuple
      * @param tableId the table to add the tuple to
@@ -139,6 +214,12 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+
+        // 获取 数据库文件 Dbfile
+
+        DbFile f = Database.getCatalog().getDatabaseFile(tableId);
+        updateBufferPool(f.insertTuple(tid,t),tid);
+
     }
 
     /**
@@ -147,9 +228,9 @@ public class BufferPool {
      * other pages that are updated. May block if the lock(s) cannot be acquired.
      *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
@@ -158,7 +239,32 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        // 查询所属表对应的文件
+
+        DbFile f = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        updateBufferPool(f.deleteTuple(tid,t),tid);
     }
+
+
+    /**
+     * 更新缓存:新加的
+     * @param pageList 需要更新的页面
+     * @param tid 事务id
+     * */
+    private void updateBufferPool(List<Page> pageList, TransactionId tid) throws DbException {
+
+
+        for(Page p:pageList){
+            p.markDirty(true,tid);
+            // update bufferpool
+            if(pageStore.size() > numPages)
+                evictPage();
+            pageStore.put(p.getId(),p);
+        }
+    }
+
+
+
 
     /**
      * Flush all dirty pages to disk.
@@ -169,19 +275,30 @@ public class BufferPool {
         // some code goes here
         // not necessary for lab1
 
+        // add
+        for (PageId pageId: pageStore.keySet()) {
+            flushPage(pageId);
+        }
+
     }
+
+
 
     /** Remove the specific page id from the buffer pool.
         Needed by the recovery manager to ensure that the
         buffer pool doesn't keep a rolled back page in its
         cache.
-        
+
         Also used by B+ tree files to ensure that deleted pages
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
+
+
+        // 删除缓存
+        pageStore.remove(pid);
     }
 
     /**
@@ -191,6 +308,20 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
+
+
+
+
+        Page p = pageStore.get(pid);
+        TransactionId tid = null;
+        // flush it if it is dirty
+        if((tid = p.isDirty())!= null){
+            Database.getLogFile().logWrite(tid,p.getBeforeImage(),p);
+            Database.getLogFile().force();
+            // write to disk
+            Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(p);
+            p.markDirty(false,null);
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -207,6 +338,16 @@ public class BufferPool {
     private synchronized  void evictPage() throws DbException {
         // some code goes here
         // not necessary for lab1
+
+
+
+        PageId pid = new ArrayList<>(pageStore.keySet()).get(0);
+        try{
+            flushPage(pid);
+        }catch(IOException e){
+            e.printStackTrace();
+        }
+        discardPage(pid);
     }
 
 }
