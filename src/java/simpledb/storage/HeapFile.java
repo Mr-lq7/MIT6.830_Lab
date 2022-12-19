@@ -162,6 +162,9 @@ public class HeapFile implements DbFile {
                 list.add(page);
                 return list;
             }
+            else {
+                Database.getBufferPool().unsafeReleasePage(tid, pageId); ///////////////加锁
+            }
         }
 
         // 如果所有页都已经写满，就要新建新的页面来加入(记得开启 append = true 也就是增量增加)

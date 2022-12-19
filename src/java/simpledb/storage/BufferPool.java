@@ -4,6 +4,7 @@ import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
 import simpledb.common.DeadlockException;
+import simpledb.transaction.PageLockManager;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
@@ -11,6 +12,8 @@ import java.io.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
+import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -24,6 +27,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * @Threadsafe, all fields are final
  */
+
+
+
+
 public class BufferPool {
     /** Bytes per page, including header. */
     private static final int DEFAULT_PAGE_SIZE = 4096;
@@ -80,6 +87,120 @@ public class BufferPool {
         return node;
 
     }
+
+
+//    private class Lock{
+//        TransactionId tid;
+//        int lockType;   // 0 for shared lock and 1 for exclusive lock
+//
+//        public Lock(TransactionId tid,int lockType){
+//            this.tid = tid;
+//            this.lockType = lockType;
+//        }
+//    }
+//
+//    private class PageLockManager{
+//        ConcurrentHashMap<PageId, Vector<Lock>> lockMap;
+//
+//        public PageLockManager(){
+//            lockMap = new ConcurrentHashMap<PageId,Vector<Lock>>();
+//        }
+//
+//        public synchronized boolean acquireLock(PageId pid,TransactionId tid,int lockType){
+//            // if no lock held on pid
+//            if(lockMap.get(pid) == null){
+//                Lock lock = new Lock(tid,lockType);
+//                Vector<Lock> locks = new Vector<>();
+//                locks.add(lock);
+//                lockMap.put(pid,locks);
+//
+//                return true;
+//            }
+//
+//            // if some Tx holds lock on pid
+//            // locks.size() won't be 0 because releaseLock will remove 0 size locks from lockMap
+//            Vector<Lock> locks = lockMap.get(pid);
+//
+//            // if tid already holds lock on pid
+//            for(Lock lock:locks){
+//                if(lock.tid == tid){
+//                    // already hold that lock
+//                    if(lock.lockType == lockType)
+//                        return true;
+//                    // already hold exclusive lock when acquire shared lock
+//                    if(lock.lockType == 1)
+//                        return true;
+//                    // already hold shared lock,upgrade to exclusive lock
+//                    if(locks.size()==1){
+//                        lock.lockType = 1;
+//                        return true;
+//                    }else{
+//                        return false;
+//                    }
+//                }
+//            }
+//
+//            // if the lock is a exclusive lock
+//            if (locks.get(0).lockType ==1){
+//                assert locks.size() == 1 : "exclusive lock can't coexist with other locks";
+//                return false;
+//            }
+//
+//            // if no exclusive lock is held, there could be multiple shared locks
+//            if(lockType == 0){
+//                Lock lock = new Lock(tid,0);
+//                locks.add(lock);
+//                lockMap.put(pid,locks);
+//
+//                return true;
+//            }
+//            // can not acquire a exclusive lock when there are shard locks on pid
+//            return false;
+//        }
+//
+//
+//        public synchronized boolean releaseLock(PageId pid,TransactionId tid){
+//            // if not a single lock is held on pid
+//            assert lockMap.get(pid) != null : "page not locked!";
+//            Vector<Lock> locks = lockMap.get(pid);
+//
+//            for(int i=0;i<locks.size();++i){
+//                Lock lock = locks.get(i);
+//
+//                // release lock
+//                if(lock.tid == tid){
+//                    locks.remove(lock);
+//
+//                    // if the last lock is released
+//                    // remove 0 size locks from lockMap
+//                    if(locks.size() == 0)
+//                        lockMap.remove(pid);
+//                    return true;
+//                }
+//            }
+//            // not found tid in tids which lock on pid
+//            return false;
+//        }
+//
+//
+//        public synchronized boolean holdsLock(PageId pid,TransactionId tid){
+//            // if not a single lock is held on pid
+//            if(lockMap.get(pid) == null)
+//                return false;
+//            Vector<Lock> locks = lockMap.get(pid);
+//
+//            // check if a tid exist in pid's vector of locks
+//            for(Lock lock:locks){
+//                if(lock.tid == tid){
+//                    return true;
+//                }
+//            }
+//            return false;
+//        }
+//    }
+
+    private PageLockManager lockManager;
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
@@ -94,6 +215,7 @@ public class BufferPool {
         tail = new LinkedNode(new HeapPageId(-1, -1), null);
         head.next = tail;
         tail.prev = head;
+        lockManager = new PageLockManager();
     }
 
     public static int getPageSize() {
@@ -129,6 +251,30 @@ public class BufferPool {
         throws TransactionAbortedException, DbException {
         // some code goes here
 
+        int lockType;
+        if(perm == Permissions.READ_ONLY){
+            lockType = 0;
+        }else{
+            lockType = 1;
+        }
+        boolean lockAcquired = false;
+
+
+        // 加了死锁模块
+
+        long start = System.currentTimeMillis();
+        long timeout = new Random().nextInt(2000) + 1000;
+        while(!lockAcquired){
+            long now = System.currentTimeMillis();
+            if(now-start > timeout){
+                // TransactionAbortedException means detect a deadlock
+                // after upper caller catch TransactionAbortedException
+                // will call transactionComplete to abort this transition
+                // give someone else a chance: abort the transaction
+                throw new TransactionAbortedException();
+            }
+            lockAcquired = lockManager.acquireLock(pid,tid,lockType);
+        }
 
         // 如果缓存池中没有
         if(!pageStore.containsKey(pid)){
@@ -164,6 +310,8 @@ public class BufferPool {
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+
+        lockManager.releaseLock(pid,tid);
     }
 
     /**
@@ -174,13 +322,31 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) {
         // some code goes here
         // not necessary for lab1|lab2
+
+        transactionComplete(tid,true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
         // some code goes here
         // not necessary for lab1|lab2
-        return false;
+//        return false;
+        return lockManager.holdsLock(p,tid);
+    }
+
+    private synchronized void restorePages(TransactionId tid) {
+
+        for (PageId pid : pageStore.keySet()) {
+            Page page = pageStore.get(pid);
+
+            if (page.isDirty() == tid) {
+                int tabId = pid.getTableId();
+                DbFile file =  Database.getCatalog().getDatabaseFile(tabId);
+                Page pageFromDisk = file.readPage(pid);
+
+                pageStore.put(pid, pageFromDisk);
+            }
+        }
     }
 
     /**
@@ -193,6 +359,23 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid, boolean commit) {
         // some code goes here
         // not necessary for lab1|lab2
+        if(commit){
+            try {
+                flushPages(tid);
+            } catch (IOException e) {
+                System.out.println("异常");
+            }
+
+        }else{
+            restorePages(tid);
+        }
+
+        // 释放锁
+        for(PageId pid:pageStore.keySet()){
+            if(holdsLock(tid,pid))
+                unsafeReleasePage(tid,pid);
+        }
+
     }
 
     /**
@@ -329,6 +512,12 @@ public class BufferPool {
     public synchronized  void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for (PageId pid : pageStore.keySet()) {
+            Page page = pageStore.get(pid);
+            if (page.isDirty() == tid) {
+                flushPage(pid);
+            }
+        }
     }
 
     /**
@@ -341,13 +530,24 @@ public class BufferPool {
 
 
 
-        PageId pid = new ArrayList<>(pageStore.keySet()).get(0);
-        try{
-            flushPage(pid);
-        }catch(IOException e){
-            e.printStackTrace();
+        int l = new ArrayList<>(pageStore.keySet()).size();
+        for (int i = 0; i < l; i++) {
+            PageId pid = new ArrayList<>(pageStore.keySet()).get(i);
+            Page p = pageStore.get(pid);
+            if (p.isDirty() == null) {
+
+                discardPage(pid);
+                return;
+            }
         }
-        discardPage(pid);
+
+        // 这个抛出异常十分重要
+        throw  new DbException("failed to evict page: all pages are either dirty");
+
+
+
+
+
     }
 
 }
