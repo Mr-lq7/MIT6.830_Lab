@@ -460,6 +460,89 @@ public class LogFile {
             synchronized(this) {
                 preAppend();
                 // some code goes here
+
+//                long tidId = tid.getId();
+//                Long begin = tidToFirstLogRecord.get(tidId);
+//                raf.seek(begin);
+//                while(true){
+//                    try{
+//                        int type = raf.readInt();
+//                        Long curTid = raf.readLong();
+//                        if(curTid!=tidId){
+//                            //如果不是当前的tid，就直接跳过
+//                            if(type==3){
+//                                //update record 还要跳过页数据
+//                                readPageData(raf);
+//                                readPageData(raf);
+//                            }
+//                        }else{
+//                            if(type==3){
+//                                //只需要恢复到最初的状态就行
+//                                Page before = readPageData(raf);
+//                                Page after = readPageData(raf);
+//                                DbFile databaseFile = Database.getCatalog().getDatabaseFile(before.getId().getTableId());
+//                                databaseFile.writePage(before);
+//                                Database.getBufferPool().discardPage(after.getId());
+//                                raf.seek(raf.getFilePointer()+8);
+//                                break;
+//                            }
+//                        }
+//                        raf.seek(raf.getFilePointer()+8);
+//                    }catch (EOFException e){
+//                        break;
+//                    }
+//                }
+
+
+                Long firstLogRecord = tidToFirstLogRecord.get(tid.getId());
+                //移动到日志开始的地方
+                raf.seek(firstLogRecord);
+                Set<PageId> set = new HashSet<>();
+                while (true) {
+                    try {
+                        //Each log record begins with an integer type and a long integer
+                        //transaction id.
+                        int type = raf.readInt();
+                        long txid = raf.readLong();
+                        switch (type) {
+                            case UPDATE_RECORD :
+                                //UPDATE RECORDS consist of two entries, a before image and an
+                                //after image.  These images are serialized Page objects, and can be
+                                //accessed with the LogFile.readPageData() and LogFile.writePageData()
+                                //methods.  See LogFile.print() for an example.
+                                Page beforeImage = readPageData(raf);
+                                Page afterImage = readPageData(raf);
+                                PageId pageId = beforeImage.getId();
+                                if (txid == tid.getId() && !set.contains(pageId)) {
+                                    set.add(pageId);
+                                    Database.getBufferPool().discardPage(pageId);
+                                    Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
+                                }
+                                break;
+                            case CHECKPOINT_RECORD:
+                                //CHECKPOINT records consist of active transactions at the time
+                                //the checkpoint was taken and their first log record on disk.  The format
+                                //of the record is an integer count of the number of transactions, as well
+                                //as a long integer transaction id and a long integer first record offset
+                                //for each active transaction.
+                                int txCnt = raf.readInt();
+                                while (txCnt -- > 0) {
+                                    raf.readLong();
+                                    raf.readLong();
+                                }
+                                break;
+                            default:
+                                //others
+                                break;
+                        }
+                        //Each log record ends with a long integer file offset representing the position in the log file where the record began.
+                        raf.readLong();
+                    } catch (EOFException e) {
+                        break;
+                    }
+                }
+
+
             }
         }
     }
@@ -487,9 +570,154 @@ public class LogFile {
             synchronized (this) {
                 recoveryUndecided = false;
                 // some code goes here
+//                HashMap<Long, List<Page[]>> undoMap = new HashMap<>();
+//                raf.seek(0);
+//                print();
+//                long checkpoint = raf.readLong();
+//                if(checkpoint!=-1){
+//                    HashMap<Long, Long> tidPos = new HashMap<>();
+//                    raf.seek(checkpoint);
+//                    //跳过record type和tid
+//                    raf.seek(raf.getFilePointer()+12);
+//                    //获取正在进行事务的个数
+//                    int num = raf.readInt();
+//                    while(num>0){
+//                        //获取每一个事务的tid和第一条log record OFFSET
+//                        long curTid = raf.readLong();
+//                        long offset = raf.readLong();
+//                        tidPos.put(curTid,offset);
+//                        num--;
+//                    }
+//                    for(Long pos:tidPos.keySet()){
+//                        raf.seek(tidPos.get(pos));
+//                        recoverSearch(raf,undoMap);
+//                    }
+//                }else{
+//                    System.out.println(raf.getFilePointer() + "-----------");
+//                    recoverSearch(raf, undoMap);
+//                }
+//                //进行undo操作
+//                for(Long tid:undoMap.keySet()){
+//                    Page[] pages = undoMap.get(tid).get(0);
+//                    Page before = pages[0];
+//                    DbFile databaseFile = Database.getCatalog().getDatabaseFile(before.getId().getTableId());
+//                    databaseFile.writePage(before);
+//                }
+//                undoMap.clear();
+
+
+                raf = new RandomAccessFile(logFile, "rw");
+                //已提交的事务id集合
+                Set<Long> committedId = new HashSet<>();
+                //存放事务id对应的beforePage和afterPage
+                Map<Long, List<Page>> beforePages = new HashMap<>();
+                Map<Long, List<Page>> afterPages = new HashMap<>();
+                //获取checkpoint
+                Long checkpoint = raf.readLong();
+                if (checkpoint != -1) {
+//                    raf.seek(checkpoint);
+                }
+                while (true) {
+                    try {
+                        int type = raf.readInt();
+                        long txid = raf.readLong();
+                        switch (type) {
+                            case UPDATE_RECORD:
+                                Page beforeImage = readPageData(raf);
+                                Page afterImage = readPageData(raf);
+                                List<Page> l1 = beforePages.getOrDefault(txid, new ArrayList<>());
+                                l1.add(beforeImage);
+                                beforePages.put(txid, l1);
+                                List<Page> l2 = afterPages.getOrDefault(txid, new ArrayList<>());
+                                l2.add(afterImage);
+                                afterPages.put(txid, l2);
+                                break;
+                            case COMMIT_RECORD:
+                                committedId.add(txid);
+                                break;
+                            case CHECKPOINT_RECORD:
+                                int numTxs = raf.readInt();
+                                while (numTxs -- > 0) {
+                                    raf.readLong();
+                                    raf.readLong();
+                                }
+                                break;
+                            default:
+                                break;
+                        }
+                        //end
+                        raf.readLong();
+
+                    } catch (EOFException e) {
+                        break;
+                    }
+                }
+
+                //处理未提交事务，直接写before-image
+                for (long txid :beforePages.keySet()) {
+                    if (!committedId.contains(txid)) {
+                        List<Page> pages = beforePages.get(txid);
+                        for (Page p : pages) {
+                            Database.getCatalog().getDatabaseFile(p.getId().getTableId()).writePage(p);
+                        }
+                    }
+                }
+
+                //处理已提交事务，直接写after-image
+                for (long txid : committedId) {
+                    if (afterPages.containsKey(txid)) {
+                        List<Page> pages = afterPages.get(txid);
+                        for (Page page : pages) {
+                            Database.getCatalog().getDatabaseFile(page.getId().getTableId()).writePage(page);
+                        }
+                    }
+                }
+
+
+
             }
          }
     }
+
+//    /**
+//     * 从指定位置开始检索每一条记录，update记录就直接放入map中，commit就直接将最终page刷盘，abort就直接将开始前的page刷盘
+//     * @param raf
+//     * @param map
+//     */
+//    private void recoverSearch(RandomAccessFile raf,Map<Long,List<Page[]>> map) throws IOException {
+//        while(true){
+//            try{
+//                int type = raf.readInt();
+//                long curTid = raf.readLong();
+//                if(type==3){
+//                    //update
+//                    if(!map.containsKey(curTid)){
+//                        map.put(curTid,new ArrayList<>());
+//                    }
+//                    Page before = readPageData(raf);
+//                    Page after = readPageData(raf);
+//                    map.get(curTid).add(new Page[]{before,after});
+//                }else if(type==2 && map.containsKey(curTid)){
+//                    //commit
+//                    Page[] pages = map.get(curTid).get(map.get(curTid).size() - 1);
+//                    Page after = pages[1];
+//                    DbFile databaseFile = Database.getCatalog().getDatabaseFile(after.getId().getTableId());
+//                    databaseFile.writePage(after);
+//                    map.remove(curTid);
+//                }else if(type==1 && map.containsKey(curTid)){
+//                    //abort
+//                    Page[] pages = map.get(curTid).get(0);
+//                    Page before = pages[0];
+//                    DbFile databaseFile = Database.getCatalog().getDatabaseFile(before.getId().getTableId());
+//                    databaseFile.writePage(before);
+//                    map.remove(curTid);
+//                }
+//                raf.seek(raf.getFilePointer()+8);
+//            }catch (EOFException e){
+//                break;
+//            }
+//        }
+//    }
 
     /** Print out a human readable represenation of the log */
     public void print() throws IOException {
