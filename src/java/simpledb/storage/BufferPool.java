@@ -245,7 +245,6 @@ public class BufferPool {
         updateBufferPool(f.deleteTuple(tid,t),tid);
     }
 
-
     /**
      * 更新缓存:新加的
      * @param pageList 需要更新的页面
@@ -339,7 +338,7 @@ public class BufferPool {
         // some code goes here
         // not necessary for lab1
 
-
+        // 并没有说一定要替换脏页, 只是替换脏页的时候要写回磁盘
 
         PageId pid = new ArrayList<>(pageStore.keySet()).get(0);
         try{

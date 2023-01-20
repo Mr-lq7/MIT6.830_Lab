@@ -47,9 +47,14 @@ public class StringAggregator implements Aggregator {
         } else {
             assert gbfieldtype != null;
             if (this.gbfieldtype == Type.INT_TYPE) {
-                aggr = (Object) new TreeMap<Integer, ArrayList<Integer>>();
+//                aggr = (Object) new TreeMap<Integer, ArrayList<Integer>>();
+
+                aggr = (Object) new TreeMap<Integer, Integer>();
             } else {
-                aggr = (Object) new TreeMap<String, ArrayList<String>>();
+//                aggr = (Object) new TreeMap<String, ArrayList<String>>();
+
+
+                aggr = (Object) new TreeMap<String, Integer>();
             }
         }
     }

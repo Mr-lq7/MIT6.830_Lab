@@ -94,6 +94,7 @@ public class SeqScan implements OpIterator {
         this(tid, tableId, Database.getCatalog().getTableName(tableId));
     }
 
+    //
     public void open() throws DbException, TransactionAbortedException {
         // some code goes here
 
@@ -129,11 +130,16 @@ public class SeqScan implements OpIterator {
 
         return  new_td;
 //        return null;
+//        TupleDesc td = Database.getCatalog().getTupleDesc(this.tableid);
+//        td.setTableAlias(this.tableAlias);
+//        return Database.getCatalog().getTupleDesc(this.tableid);
+//        return td;
     }
+
 
     public boolean hasNext() throws TransactionAbortedException, DbException {
         // some code goes here
-//        if (it == null) {
+//        if (this.it == null) {
 //            return false;
 //        }
         return this.it.hasNext();
