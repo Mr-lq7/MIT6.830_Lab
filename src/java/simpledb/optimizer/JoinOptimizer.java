@@ -269,8 +269,14 @@ public class JoinOptimizer {
                     //找出最优的方案：依据planCache和计算set - logicalJoinNode的最优值
                     CostCard costCard = computeCostAndCardOfSubplan(stats, filterSelectivities, logicalJoinNode, set, bestCostSoFar, planCache);
                     if (costCard == null) continue;
-                    bestCostSoFar = costCard.cost;
-                    bestCostCard = costCard;
+
+                    // plus
+                    if (costCard.cost < bestCostSoFar) {
+                        bestCostSoFar = costCard.cost;
+                        bestCostCard = costCard;
+                    }
+//                    bestCostSoFar = costCard.cost;
+//                    bestCostCard = costCard;
                 }
                 if (bestCostSoFar != Double.MAX_VALUE) {
                     planCache.addPlan(set, bestCostCard.cost, bestCostCard.card, bestCostCard.plan);
