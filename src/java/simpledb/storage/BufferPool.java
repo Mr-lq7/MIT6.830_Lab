@@ -499,8 +499,8 @@ public class BufferPool {
         TransactionId tid = null;
         // flush it if it is dirty
         if((tid = p.isDirty())!= null){
-            Database.getLogFile().logWrite(tid,p.getBeforeImage(),p);
-            Database.getLogFile().force();
+//            Database.getLogFile().logWrite(tid,p.getBeforeImage(),p);
+//            Database.getLogFile().force();
             // write to disk
             Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(p);
             p.markDirty(false,null);

@@ -163,7 +163,8 @@ public class HeapFile implements DbFile {
                 return list;
             }
             else {
-                Database.getBufferPool().unsafeReleasePage(tid, pageId); ///////////////加锁
+                //当该 page 上没有空闲空 slot 的时候，释放该 page 上的锁，避免影响其他事务访问
+                Database.getBufferPool().unsafeReleasePage(tid, pageId);
             }
         }
 
